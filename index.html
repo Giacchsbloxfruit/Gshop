@@ -313,18 +313,24 @@ async function tryRememberedDevice(){
   try{
     const raw=localStorage.getItem(DEVICE_KEY);
     if(!raw)return false;
-    // Chỉ dùng cờ nhớ thiết bị; dữ liệu vẫn luôn lấy từ GitHub trước.
-    const remoteText=await fetchPublicDataFile();
-    const payload=JSON.parse(remoteText.trim().split('\n').slice(1).join('\n'));
+    
+    // SỬA LỖI: Ưu tiên dùng dữ liệu lưu trong trình duyệt (để không bị mất acc mới thêm khi F5)
+    let text = localStorage.getItem(STORAGE_KEY);
+    if(!text) {
+      text = await fetchPublicDataFile();
+      if(!text) return false;
+    }
+    
+    const payload=JSON.parse(text.trim().split('\n').slice(1).join('\n'));
     if(payload.version!==3||!payload.salt)throw new Error('FORMAT');
     currentSalt=unb64(payload.salt);
     cryptoKey=await deriveKey(MASTER_PASSWORD,currentSalt);
-    state=await decryptState(remoteText,cryptoKey);
+    state=await decryptState(text,cryptoKey);
     await saveLocal();
     unlocked=true;
     $('lockScreen').classList.add('hidden');
     render();
-    setSyncStatus('', 'Đã tải data.txt mới nhất từ GitHub.');
+    setSyncStatus('', 'Đã tải dữ liệu thành công.');
     return true;
   }catch(e){
     console.warn('Remembered device unavailable or remote data changed',e);
@@ -333,34 +339,44 @@ async function tryRememberedDevice(){
 }
 
 async function fetchPublicDataFile(){
-  // Cache-busting để Pages không trả bản data.txt cũ từ cache trình duyệt/CDN.
-  const url=new URL('./data.txt',window.location.href);
-  url.searchParams.set('v',Date.now().toString());
-  const r=await fetch(url.toString(),{cache:'no-store',credentials:'omit'});
-  if(!r.ok) throw new Error('DATA_'+r.status);
-  const text=await r.text();
-  if(!text.trim().startsWith('CV3')) throw new Error('DATA_FORMAT');
-  return text;
+  try {
+    const url=new URL('./data.txt',window.location.href);
+    url.searchParams.set('v',Date.now().toString());
+    const r=await fetch(url.toString(),{cache:'no-store',credentials:'omit'});
+    if(!r.ok) throw new Error('DATA_'+r.status);
+    const text=await r.text();
+    if(!text.trim().startsWith('CV3')) throw new Error('DATA_FORMAT');
+    return text;
+  } catch (e) {
+    // Trả về null nếu lỗi fetch (do chạy file trực tiếp file:// từ ổ cứng)
+    return null; 
+  }
 }
 
 async function unlock(password){
   try{
     if(password!==MASTER_PASSWORD) throw new Error('BAD_PASSWORD');
-    // Luôn lấy data.txt mới nhất từ GitHub Pages trước.
-    const remoteText=await fetchPublicDataFile();
-    const lines=remoteText.trim().split('\n');
+    
+    // SỬA LỖI: Lấy từ LocalStorage trước để giữ nguyên acc vừa nhập
+    let text = localStorage.getItem(STORAGE_KEY);
+    if(!text) {
+      text = await fetchPublicDataFile();
+      if(!text) throw new Error('KHONG_CO_DU_LIEU');
+    }
+    
+    const lines=text.trim().split('\n');
     if(lines[0]!=='CV3'||lines.length<2) throw new Error('FORMAT');
     const payload=JSON.parse(lines.slice(1).join('\n'));
     if(payload.version!==3||!payload.salt) throw new Error('FORMAT');
     currentSalt=unb64(payload.salt);
     cryptoKey=await deriveKey(MASTER_PASSWORD,currentSalt);
-    state=await decryptState(remoteText,cryptoKey);
+    state=await decryptState(text,cryptoKey);
     await saveLocal();
     unlocked=true;
     $('lockScreen').classList.add('hidden');
     $('lockError').textContent='';
     render();
-    setSyncStatus('', 'Đã tải data.txt mới nhất từ GitHub.');
+    setSyncStatus('', 'Đã tải dữ liệu thành công.');
     return true;
   }catch(e){
     console.error('Unlock failed:',e);
