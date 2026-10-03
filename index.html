@@ -279,18 +279,52 @@ async function exportKey(key){return crypto.subtle.exportKey('jwk',key);}
 async function importKey(jwk){return crypto.subtle.importKey('jwk',jwk,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);}
 async function tryRememberedDevice(){try{const raw=localStorage.getItem(DEVICE_KEY);if(!raw)return false;const jwk=JSON.parse(raw);cryptoKey=await importKey(jwk);const local=await loadLocalEncrypted();if(!local)return false;state=await decryptState(local,cryptoKey);unlocked=true;$('lockScreen').classList.add('hidden');render();if(gh.token){setSyncStatus('busy','Đang tải dữ liệu mới nhất...');await loadFromGithub();}else setSyncStatus('', 'Đã mở khóa trên thiết bị này.');return true;}catch(e){console.warn('Remembered device unavailable',e);localStorage.removeItem(DEVICE_KEY);cryptoKey=null;return false;}}
 
+async function fetchPublicDataFile(){
+  const r=await fetch('./data.txt?ts='+Date.now(),{cache:'no-store'});
+  if(!r.ok) throw new Error('DATA_'+r.status);
+  return r.text();
+}
+
 async function unlock(password){
-  const raw=await loadLocalEncrypted();
+  const local=await loadLocalEncrypted();
   try{
-    if(raw && raw.startsWith('CV2')){
-      const lines=raw.trim().split('\n'); currentSalt=unb64(lines[1]); cryptoKey=await deriveKey(password,currentSalt); state=await decryptState(raw,cryptoKey);
+    // Ưu tiên dữ liệu local nếu nó giải mã được. Nếu local cũ/sai khóa,
+    // tự động thử data.txt đang đi cùng GitHub Pages.
+    if(local && local.startsWith('CV2')){
+      try{
+        const lines=local.trim().split('\n');
+        currentSalt=unb64(lines[1]);
+        cryptoKey=await deriveKey(password,currentSalt);
+        state=await decryptState(local,cryptoKey);
+      }catch(localErr){
+        const remoteText=await fetchPublicDataFile();
+        const lines=remoteText.trim().split('\n');
+        if(lines[0]!=='CV2'||lines.length<4) throw localErr;
+        currentSalt=unb64(lines[1]);
+        cryptoKey=await deriveKey(password,currentSalt);
+        state=await decryptState(remoteText,cryptoKey);
+        await saveLocal();
+      }
     }else{
-      currentSalt=crypto.getRandomValues(new Uint8Array(16)); cryptoKey=await deriveKey(password,currentSalt); state=structuredClone(DEFAULT_DATA);
-      if(raw){try{state=normalize(JSON.parse(raw));}catch{}}
-      await saveLocal();
+      // Không có dữ liệu local: đọc thẳng data.txt public (nội dung vẫn đã mã hóa).
+      try{
+        const remoteText=await fetchPublicDataFile();
+        const lines=remoteText.trim().split('\n');
+        if(lines[0]!=='CV2'||lines.length<4) throw new Error('FORMAT');
+        currentSalt=unb64(lines[1]);
+        cryptoKey=await deriveKey(password,currentSalt);
+        state=await decryptState(remoteText,cryptoKey);
+        await saveLocal();
+      }catch(remoteErr){
+        currentSalt=crypto.getRandomValues(new Uint8Array(16));
+        cryptoKey=await deriveKey(password,currentSalt);
+        state=structuredClone(DEFAULT_DATA);
+        await saveLocal();
+      }
     }
     unlocked=true; $('lockScreen').classList.add('hidden'); $('lockError').textContent=''; render();
-    if(gh.token){setSyncStatus('busy','Đã cấu hình GitHub.');await loadFromGithub();} else setSyncStatus('', 'Chưa kết nối. Dữ liệu mã hóa vẫn lưu trên thiết bị.');
+    if(gh.token){setSyncStatus('busy','Đã cấu hình GitHub.');await loadFromGithub();}
+    else setSyncStatus('', 'Đã mở khóa. Dữ liệu mã hóa vẫn lưu trên thiết bị.');
     return true;
   }catch{cryptoKey=null;unlocked=false;return false;}
 }
