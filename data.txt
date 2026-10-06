@@ -1,2 +1,0 @@
-CV3
-{"version":3,"salt":"m2T1y+HvHgV3ugWew+ifIQ==","categories":[{"id":"us","name":"Clone US"},{"id":"asia","name":"Clone ASIA"},{"id":"other","name":"Khác"}],"accounts":[]}
